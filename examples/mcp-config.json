@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "egrul": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "https://gitlab.keysystems.ru/ml/mcp-tools/egrul-mcp#main"
+      ],
+      "env": {
+        "LICENSE_KEY": "YOUR_LICENSE_KEY"
+      }
+    }
+  }
+}
