@@ -1,6 +1,6 @@
 {
   "name": "egrul-inn-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "STDIO MCP server for retrieving EGRUL organization data by INN",
   "type": "module",
   "bin": {
