@@ -13,6 +13,33 @@ const OBJECT_PARAMETERS = JSON.stringify({
   },
 });
 
+const INN_ORGANIZATION_WEIGHTS = [2, 4, 10, 3, 5, 9, 4, 6, 8] as const;
+const INN_PERSON_FIRST_WEIGHTS = [7, 2, 4, 10, 3, 5, 9, 4, 6, 8] as const;
+const INN_PERSON_SECOND_WEIGHTS = [
+  3,
+  7,
+  2,
+  4,
+  10,
+  3,
+  5,
+  9,
+  4,
+  6,
+  8,
+] as const;
+
+export type EgrulIdentifierType =
+  | 'inn_organization'
+  | 'inn_person'
+  | 'ogrn'
+  | 'ogrnip';
+
+export interface ValidatedEgrulIdentifier {
+  value: string;
+  type: EgrulIdentifierType;
+}
+
 export interface EgrulApiRequest {
   ObjectCode: typeof OBJECT_CODE;
   DocCode: typeof DOC_CODE;
@@ -42,20 +69,124 @@ export class EgrulApiError extends Error {
   }
 }
 
-export function normalizeOrganizationInn(inn: number): string {
-  if (!Number.isSafeInteger(inn) || inn < 100_000_000 || inn > 9_999_999_999) {
+function calculateWeightedChecksum(
+  digits: string,
+  weights: readonly number[],
+): number {
+  const sum = weights.reduce(
+    (accumulator, weight, index) =>
+      accumulator + Number(digits[index]) * weight,
+    0,
+  );
+
+  return (sum % 11) % 10;
+}
+
+function hasValidInnOrganizationChecksum(identifier: string): boolean {
+  return (
+    calculateWeightedChecksum(
+      identifier.slice(0, 9),
+      INN_ORGANIZATION_WEIGHTS,
+    ) === Number(identifier[9])
+  );
+}
+
+function hasValidInnPersonChecksum(identifier: string): boolean {
+  const firstChecksum = calculateWeightedChecksum(
+    identifier.slice(0, 10),
+    INN_PERSON_FIRST_WEIGHTS,
+  );
+  const secondChecksum = calculateWeightedChecksum(
+    identifier.slice(0, 11),
+    INN_PERSON_SECOND_WEIGHTS,
+  );
+
+  return (
+    firstChecksum === Number(identifier[10]) &&
+    secondChecksum === Number(identifier[11])
+  );
+}
+
+function hasValidRegistrationNumberChecksum(
+  identifier: string,
+  divisor: bigint,
+): boolean {
+  const body = BigInt(identifier.slice(0, -1));
+  const expectedChecksum = Number((body % divisor) % 10n);
+
+  return expectedChecksum === Number(identifier.at(-1));
+}
+
+export function validateEgrulIdentifier(
+  identifier: string,
+): ValidatedEgrulIdentifier {
+  const value = identifier.trim();
+
+  if (!/^\d+$/.test(value)) {
     throw new EgrulApiError(
-      'ИНН организации должен быть безопасным целым числом из 9–10 цифр.',
+      'Идентификатор должен быть строкой, содержащей только цифры.',
     );
   }
 
-  return String(inn).padStart(10, '0');
+  if (/^0+$/.test(value)) {
+    throw new EgrulApiError('Идентификатор не может состоять только из нулей.');
+  }
+
+  if (value.length === 10) {
+    if (!hasValidInnOrganizationChecksum(value)) {
+      throw new EgrulApiError(
+        'Некорректная контрольная цифра 10-значного ИНН организации.',
+      );
+    }
+
+    return { value, type: 'inn_organization' };
+  }
+
+  if (value.length === 12) {
+    if (!hasValidInnPersonChecksum(value)) {
+      throw new EgrulApiError(
+        'Некорректные контрольные цифры 12-значного ИНН физического лица или ИП.',
+      );
+    }
+
+    return { value, type: 'inn_person' };
+  }
+
+  if (value.length === 13) {
+    if (value[0] !== '1' && value[0] !== '5') {
+      throw new EgrulApiError('ОГРН должен начинаться с цифры 1 или 5.');
+    }
+
+    if (!hasValidRegistrationNumberChecksum(value, 11n)) {
+      throw new EgrulApiError('Некорректная контрольная цифра ОГРН.');
+    }
+
+    return { value, type: 'ogrn' };
+  }
+
+  if (value.length === 15) {
+    if (value[0] !== '3') {
+      throw new EgrulApiError('ОГРНИП должен начинаться с цифры 3.');
+    }
+
+    if (!hasValidRegistrationNumberChecksum(value, 13n)) {
+      throw new EgrulApiError('Некорректная контрольная цифра ОГРНИП.');
+    }
+
+    return { value, type: 'ogrnip' };
+  }
+
+  throw new EgrulApiError(
+    'Неподдерживаемая длина идентификатора: ожидается ИНН из 10 или 12 цифр, ОГРН из 13 цифр либо ОГРНИП из 15 цифр.',
+  );
 }
 
 export function buildEgrulRequest(
-  inn: number,
+  identifier: string,
   licenseKey: string,
 ): EgrulApiRequest {
+  const validatedIdentifier = validateEgrulIdentifier(identifier);
+
   return {
     ObjectCode: OBJECT_CODE,
     DocCode: DOC_CODE,
@@ -63,12 +194,12 @@ export function buildEgrulRequest(
     Mode: null,
     LicenseKey: licenseKey,
     ObjectParameters: OBJECT_PARAMETERS,
-    SearchCode: normalizeOrganizationInn(inn),
+    SearchCode: validatedIdentifier.value,
   };
 }
 
-export async function fetchOrganizationByInn(
-  inn: number,
+export async function fetchEgrulEntityByIdentifier(
+  identifier: string,
   options: EgrulApiOptions = {},
 ): Promise<EgrulApiResponse> {
   const apiAddress = validateApiAddress(options.apiAddress ?? API_ADDR);
@@ -80,9 +211,9 @@ export async function fetchOrganizationByInn(
     throw new EgrulApiError('Тайм-аут запроса должен быть положительным числом.');
   }
 
-  const identifier = buildEgrulRequest(inn, licenseKey);
+  const identifierPayload = buildEgrulRequest(identifier, licenseKey);
   const body = new URLSearchParams({
-    identifier: JSON.stringify(identifier),
+    identifier: JSON.stringify(identifierPayload),
   });
   const abortController = new AbortController();
   const timeout = setTimeout(() => abortController.abort(), timeoutMs);
@@ -105,7 +236,7 @@ export async function fetchOrganizationByInn(
       const safeDetails = details.replaceAll(licenseKey, '[REDACTED]');
       const suffix = safeDetails ? `: ${safeDetails.slice(0, 1_000)}` : '';
       throw new EgrulApiError(
-        `ЕГРЮЛ API вернул HTTP ${response.status}${suffix}`,
+        `ЕГРЮЛ/ЕГРИП API вернул HTTP ${response.status}${suffix}`,
         response.status,
       );
     }
@@ -126,12 +257,14 @@ export async function fetchOrganizationByInn(
 
     if (abortController.signal.aborted) {
       throw new EgrulApiError(
-        `ЕГРЮЛ API не ответил за ${timeoutMs} мс.`,
+        `ЕГРЮЛ/ЕГРИП API не ответил за ${timeoutMs} мс.`,
       );
     }
 
     const message = error instanceof Error ? error.message : String(error);
-    throw new EgrulApiError(`Не удалось выполнить запрос к ЕГРЮЛ API: ${message}`);
+    throw new EgrulApiError(
+      `Не удалось выполнить запрос к ЕГРЮЛ/ЕГРИП API: ${message}`,
+    );
   } finally {
     clearTimeout(timeout);
   }

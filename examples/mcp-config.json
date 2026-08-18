@@ -4,7 +4,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "github:OWNER/REPOSITORY#main"
+        "git+https://github.com/Efim27/egrul-npx.git#main"
       ],
       "env": {
         "LICENSE_KEY": "YOUR_LICENSE_KEY"

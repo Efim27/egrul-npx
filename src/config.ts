@@ -1,7 +1,7 @@
 export const API_ADDR = 'https://services.keysystems.ru/egrul/LoadOutcome';
 
 export const SERVER_NAME = 'egrul-inn-mcp';
-export const SERVER_VERSION = '1.0.1';
+export const SERVER_VERSION = '1.0.3';
 export const REQUEST_TIMEOUT_MS = 30_000;
 
 export class ConfigurationError extends Error {
